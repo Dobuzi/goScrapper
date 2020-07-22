@@ -1,40 +1,69 @@
 package main
 
 import (
+	"encoding/csv"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 )
 
-type jobs struct {
+type job struct {
 	id       string
 	title    string
+	company  string
 	location string
 	salary   string
 	summary  string
 }
 
-var baseURL string = "https://kr.indeed.com/취업?as_and=python&radius=25&l=seoul&limit=50"
-var classCard string = ".jobsearch-SerpJobCard"
-var classJobID string = ".data-jk"
+const baseURL = "https://kr.indeed.com/취업?as_and=python&radius=25&l=seoul&limit=50"
+const jobURL = "https://kr.indeed.com/viewjob?jk="
+const pageConnection = "&start="
+const classPagination = ".pagination"
+const classTitle = ".title>a"
+const classCompany = ".company"
+const classLocation = ".location"
+const classSalary = ".salaryText"
+const classSummary = ".summary"
+const classCard = ".jobsearch-SerpJobCard"
+const classJobID = ".data-jk"
 
 func main() {
-	var allJobs []jobs
+	var allJobs []job
 	totalPages := getNumberOfPages()
 	for i := 0; i < totalPages; i++ {
 		jobsInPage := getPage(i)
 		allJobs = append(allJobs, jobsInPage...)
 	}
-	fmt.Println(allJobs)
+	writeJobs(allJobs)
+	fmt.Println("Done, extract", len(allJobs), "jobs from indeed.com")
 }
 
-func getPage(page int) []jobs {
-	var jobsInPage []jobs
-	pageURL := baseURL + "&start=" + strconv.Itoa(page*50)
+func writeJobs(allJobs []job) {
+	file, err := os.Create("Indeed_Jobs.csv")
+	checkError(err)
+	w := csv.NewWriter(file)
+	defer w.Flush()
+
+	headers := []string{"Title", "Company", "Location", "Salary", "Link", "Summary"}
+	writeErr := w.Write(headers)
+	checkError(writeErr)
+
+	for _, job := range allJobs {
+		jobData := []string{job.title, job.company, job.location, job.salary, jobURL + job.id, job.summary}
+		writeErr := w.Write(jobData)
+		checkError(writeErr)
+	}
+}
+
+func getPage(page int) []job {
+	var jobsInPage []job
+	pageURL := baseURL + pageConnection + strconv.Itoa(page*50)
 	fmt.Println("Requesting: ", pageURL)
 	res, err := http.Get(pageURL)
 	checkError(err)
@@ -54,15 +83,17 @@ func getPage(page int) []jobs {
 	return jobsInPage
 }
 
-func extractJob(card *goquery.Selection) jobs {
+func extractJob(card *goquery.Selection) job {
 	id, _ := card.Attr(classJobID)
-	title := card.Find(".title>a").Text()
-	location := card.Find(".sjcl").Text()
-	salary := card.Find(".salaryText").Text()
-	summary := card.Find(".summary").Text()
-	return jobs{
+	title := card.Find(classTitle).Text()
+	company := card.Find(classCompany).Text()
+	location := card.Find(classLocation).Text()
+	salary := card.Find(classSalary).Text()
+	summary := card.Find(classSummary).Text()
+	return job{
 		id:       cleanString(id),
 		title:    cleanString(title),
+		company:  cleanString(company),
 		location: cleanString(location),
 		salary:   cleanString(salary),
 		summary:  cleanString(summary),
@@ -82,7 +113,7 @@ func getNumberOfPages() int {
 	defer res.Body.Close()
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	checkError(err)
-	doc.Find(".pagination").Each(func(i int, s *goquery.Selection) {
+	doc.Find(classPagination).Each(func(i int, s *goquery.Selection) {
 		pages = s.Find("a").Length()
 	})
 	return pages
