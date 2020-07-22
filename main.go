@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -34,17 +35,25 @@ const classCard = ".jobsearch-SerpJobCard"
 const classJobID = ".data-jk"
 
 func main() {
+	startTime := time.Now()
 	var allJobs []job
+	c := make(chan []job)
 	totalPages := getNumberOfPages()
 	for i := 0; i < totalPages; i++ {
-		jobsInPage := getPage(i)
+		go getPage(i, c)
+	}
+	for i := 0; i < totalPages; i++ {
+		jobsInPage := <-c
 		allJobs = append(allJobs, jobsInPage...)
 	}
 	writeJobs(allJobs)
 	fmt.Println("Done, extract", len(allJobs), "jobs from indeed.com")
+	endTime := time.Now()
+	fmt.Println("Operating time: ", endTime.Sub(startTime))
 }
 
 func writeJobs(allJobs []job) {
+	c := make(chan []string)
 	file, err := os.Create("Indeed_Jobs.csv")
 	checkError(err)
 	w := csv.NewWriter(file)
@@ -55,14 +64,23 @@ func writeJobs(allJobs []job) {
 	checkError(writeErr)
 
 	for _, job := range allJobs {
-		jobData := []string{job.title, job.company, job.location, job.salary, jobURL + job.id, job.summary}
+		go writeJobDetail(job, c)
+	}
+
+	for i := 0; i < len(allJobs); i++ {
+		jobData := <-c
 		writeErr := w.Write(jobData)
 		checkError(writeErr)
 	}
 }
 
-func getPage(page int) []job {
+func writeJobDetail(job job, c chan<- []string) {
+	c <- []string{job.title, job.company, job.location, job.salary, jobURL + job.id, job.summary}
+}
+
+func getPage(page int, upperC chan<- []job) {
 	var jobsInPage []job
+	c := make(chan job)
 	pageURL := baseURL + pageConnection + strconv.Itoa(page*50)
 	fmt.Println("Requesting: ", pageURL)
 	res, err := http.Get(pageURL)
@@ -77,20 +95,23 @@ func getPage(page int) []job {
 	searchCards := doc.Find(classCard)
 
 	searchCards.Each(func(i int, card *goquery.Selection) {
-		job := extractJob(card)
-		jobsInPage = append(jobsInPage, job)
+		go extractJob(card, c)
 	})
-	return jobsInPage
+	for i := 0; i < searchCards.Length(); i++ {
+		job := <-c
+		jobsInPage = append(jobsInPage, job)
+	}
+	upperC <- jobsInPage
 }
 
-func extractJob(card *goquery.Selection) job {
+func extractJob(card *goquery.Selection, c chan<- job) {
 	id, _ := card.Attr(classJobID)
 	title := card.Find(classTitle).Text()
 	company := card.Find(classCompany).Text()
 	location := card.Find(classLocation).Text()
 	salary := card.Find(classSalary).Text()
 	summary := card.Find(classSummary).Text()
-	return job{
+	c <- job{
 		id:       cleanString(id),
 		title:    cleanString(title),
 		company:  cleanString(company),
